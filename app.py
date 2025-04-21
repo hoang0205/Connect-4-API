@@ -18,6 +18,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+@app.get("/api/test")
+async def health_check():
+    return {"status": "ok", "message": "Server is running"}
+
 ROWS = 6
 COLS = 7
 PLAYER_PIECE = 1
