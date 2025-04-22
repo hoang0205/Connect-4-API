@@ -199,7 +199,7 @@ async def make_move(game_state: GameState) -> AIResponse:
         raise HTTPException(status_code=400, detail="Không có nước đi hợp lệ")
 
     start_time = time.time()
-    time_limit = 10.0  # giây
+    time_limit = 8.0  # giây
     best_move = random.choice(game_state.valid_moves)
 
     try:
