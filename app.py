@@ -148,7 +148,8 @@ def minimax(board, depth, alpha, beta, maximizing_player):
                 return (None, 0)
         else:
             board_bytes = np.array(board).astype(int).tobytes()
-            return (None, score_position_cached(board_bytes, AI_PIECE))
+            piece = AI_PIECE if maximizing_player else PLAYER_PIECE
+            return (None, score_position_cached(board_bytes, piece))
     if maximizing_player:
         value = -math.inf
         best_col = random.choice(valid_locations)
@@ -180,18 +181,22 @@ def minimax(board, depth, alpha, beta, maximizing_player):
                 break
         return best_col, value
 
+
 @app.post("/api/connect4-move")
 async def make_move(game_state: GameState) -> AIResponse:
     try:
         board = game_state.board
         if not game_state.valid_moves:
             raise ValueError("Không có nước đi hợp lệ")
-        selected_move, _ = minimax(board, DIFFICULTY_DEPTH, -math.inf, math.inf, True)
+
+        is_ai_turn = game_state.current_player == AI_PIECE
+        selected_move, _ = minimax(board, DIFFICULTY_DEPTH, -math.inf, math.inf, is_ai_turn)
         return AIResponse(move=selected_move)
     except Exception as e:
         if game_state.valid_moves:
             return AIResponse(move=game_state.valid_moves[0])
         raise HTTPException(status_code=400, detail=str(e))
+
 
 if __name__ == "__main__":
     import uvicorn
