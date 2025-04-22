@@ -1,32 +1,22 @@
-FROM python:3.13
+FROM python:3.9-slim
 
-
+# Set working directory
 WORKDIR /app
 
+# Install system dependencies (optional but helps with some packages)
+RUN apt-get update && apt-get install -y build-essential && apt-get clean
 
-# Cài đặt dependencies cơ bản
-RUN apt-get update && apt-get install -y \
-    build-essential \
-    && rm -rf /var/lib/apt/lists/*
-
-
-# Cấu hình môi trường
-ENV PYTHONUNBUFFERED=1
-
-
-# Copy file requirements.txt và cài đặt dependencies
+# Copy requirements file first (for layer caching)
 COPY requirements.txt .
-RUN pip install --upgrade pip
-RUN pip install -r requirements.txt
 
+# Install Python dependencies
+RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy mã nguồn
+# Copy the rest of the app code
 COPY . .
 
+# Expose port (optional but good practice)
+EXPOSE 8080
 
-# Sử dụng biến môi trường PORT (do Render cung cấp)
-EXPOSE $PORT
-
-
-# Khởi chạy ứng dụng với uvicorn
-CMD uvicorn app:app --host 0.0.0.0 --port $PORT
+# Run the application
+CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8080"]

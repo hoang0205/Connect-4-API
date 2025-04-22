@@ -10,6 +10,10 @@ from functools import lru_cache
 
 app = FastAPI()
 
+@app.get("/api/test")
+async def health_check():
+    return {"status": "ok", "message": "Server is running"}
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -18,9 +22,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-@app.get("/api/test")
-async def health_check():
-    return {"status": "ok", "message": "Server is running"}
+
 
 ROWS = 6
 COLS = 7
