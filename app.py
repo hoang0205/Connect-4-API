@@ -31,7 +31,7 @@ AI_PIECE = 2
 EMPTY = 0
 WINDOW_LENGTH = 4
 DIFFICULTY_DEPTH = 6
-TIME_LIMIT = 9.5  # Giới hạn thời gian thực sự là 9.5s để dự phòng
+TIME_LIMIT = 9.5
 
 
 class GameState(BaseModel):
@@ -162,7 +162,6 @@ def is_terminal_node(board):
 
 
 def order_moves(board, valid_locations, piece):
-    """Sắp xếp các nước đi theo thứ tự từ tốt nhất đến kém nhất"""
     scored_moves = []
 
     for col in valid_locations:
@@ -178,16 +177,12 @@ def order_moves(board, valid_locations, piece):
 
 
 def minimax(board, depth, alpha, beta, maximizing_player, start_time):
-    """Thuật toán minimax với kiểm tra thời gian chặt chẽ"""
-
-    # Kiểm tra thời gian sau mỗi nút được đánh giá
     if time.time() - start_time > TIME_LIMIT:
         raise TimeoutError("Hết thời gian suy nghĩ")
 
     valid_locations = get_valid_locations(board)
     is_terminal = is_terminal_node(board)
 
-    # Điều kiện dừng
     if depth == 0 or is_terminal:
         if is_terminal:
             if winning_move(board, AI_PIECE):
@@ -200,7 +195,6 @@ def minimax(board, depth, alpha, beta, maximizing_player, start_time):
             board_bytes = np.array(board).astype(int).tobytes()
             return None, score_position_cached(board_bytes, AI_PIECE)
 
-    # Sắp xếp các nước đi để tối ưu alpha-beta pruning
     if maximizing_player:
         ordered_cols = order_moves(board, valid_locations, AI_PIECE)
     else:
@@ -211,7 +205,6 @@ def minimax(board, depth, alpha, beta, maximizing_player, start_time):
     if maximizing_player:
         value = -math.inf
         for col in ordered_cols:
-            # Kiểm tra thời gian
             if time.time() - start_time > TIME_LIMIT:
                 return best_col, value
 
@@ -235,7 +228,6 @@ def minimax(board, depth, alpha, beta, maximizing_player, start_time):
     else:  # minimizing player
         value = math.inf
         for col in ordered_cols:
-            # Kiểm tra thời gian
             if time.time() - start_time > TIME_LIMIT:
                 return best_col, value
 
@@ -265,12 +257,10 @@ async def make_move(game_state: GameState) -> AIResponse:
     if not game_state.valid_moves:
         raise HTTPException(status_code=400, detail="Không có nước đi hợp lệ")
 
-    # Luôn có nước đi mặc định nếu minimax không kịp trả về
     best_move = random.choice(game_state.valid_moves)
     start_time = time.time()
 
     try:
-        # Thực hiện minimax với giới hạn thời gian chặt chẽ
         move, _ = minimax(board, DIFFICULTY_DEPTH, -math.inf, math.inf, True, start_time)
         if move is not None and move in game_state.valid_moves:
             best_move = move
