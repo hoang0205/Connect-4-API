@@ -157,14 +157,14 @@ def minimax(board, depth, alpha, beta, maximizing_player, start_time, time_limit
         value = -math.inf
         for col in order_moves(board, valid_locations, AI_PIECE):
             if time.time() - start_time > time_limit:
-                break
+                raise TimeoutError("Time limit exceeded")
             row = get_next_open_row(board, col)
             temp_board = [r.copy() for r in board]
             drop_piece(temp_board, row, col, AI_PIECE)
             try:
                 _, new_score = minimax(temp_board, depth - 1, alpha, beta, False, start_time, time_limit)
-            except TimeoutError:
-                break
+            except TimeoutError as e:
+                raise e
             if new_score > value:
                 value = new_score
                 best_col = col
@@ -176,14 +176,14 @@ def minimax(board, depth, alpha, beta, maximizing_player, start_time, time_limit
         value = math.inf
         for col in order_moves(board, valid_locations, PLAYER_PIECE):
             if time.time() - start_time > time_limit:
-                break
+                raise TimeoutError("Time limit exceeded")
             row = get_next_open_row(board, col)
             temp_board = [r.copy() for r in board]
             drop_piece(temp_board, row, col, PLAYER_PIECE)
             try:
                 _, new_score = minimax(temp_board, depth - 1, alpha, beta, True, start_time, time_limit)
-            except TimeoutError:
-                break
+            except TimeoutError as e:
+                raise e
             if new_score < value:
                 value = new_score
                 best_col = col
