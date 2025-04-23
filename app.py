@@ -157,14 +157,14 @@ def minimax(board, depth, alpha, beta, maximizing_player, start_time, time_limit
         value = -math.inf
         for col in order_moves(board, valid_locations, AI_PIECE):
             if time.time() - start_time > time_limit:
-                raise TimeoutError("Time limit exceeded")
+                break
             row = get_next_open_row(board, col)
             temp_board = [r.copy() for r in board]
             drop_piece(temp_board, row, col, AI_PIECE)
             try:
                 _, new_score = minimax(temp_board, depth - 1, alpha, beta, False, start_time, time_limit)
-            except TimeoutError as e:
-                raise e
+            except TimeoutError:
+                break
             if new_score > value:
                 value = new_score
                 best_col = col
@@ -176,14 +176,14 @@ def minimax(board, depth, alpha, beta, maximizing_player, start_time, time_limit
         value = math.inf
         for col in order_moves(board, valid_locations, PLAYER_PIECE):
             if time.time() - start_time > time_limit:
-                raise TimeoutError("Time limit exceeded")
+                break
             row = get_next_open_row(board, col)
             temp_board = [r.copy() for r in board]
             drop_piece(temp_board, row, col, PLAYER_PIECE)
             try:
                 _, new_score = minimax(temp_board, depth - 1, alpha, beta, True, start_time, time_limit)
-            except TimeoutError as e:
-                raise e
+            except TimeoutError:
+                break
             if new_score < value:
                 value = new_score
                 best_col = col
@@ -199,7 +199,7 @@ async def make_move(game_state: GameState) -> AIResponse:
         raise HTTPException(status_code=400, detail="Không có nước đi hợp lệ")
 
     start_time = time.time()
-    time_limit = 9.0  # giây
+    time_limit = 8.0  # giây
     best_move = random.choice(game_state.valid_moves)
 
     try:
