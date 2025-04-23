@@ -1,14 +1,12 @@
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
-from typing import List, Tuple, Optional
+from typing import List
 from fastapi.middleware.cors import CORSMiddleware
 import numpy as np
 import random
 import math
 import time
 from functools import lru_cache
-import concurrent.futures
-from dataclasses import dataclass
 
 app = FastAPI()
 
@@ -26,48 +24,25 @@ async def health_check():
     return {"status": "ok", "message": "Server is running"}
 
 
-# Các hằng số
 ROWS = 6
 COLS = 7
 PLAYER_PIECE = 1
 AI_PIECE = 2
 EMPTY = 0
 WINDOW_LENGTH = 4
-MAX_DEPTH = 10  # Độ sâu tối đa cho iterative deepening
-TIME_LIMIT = 9.5  # Giới hạn thời gian (giây)
-
-# Các trọng số đánh giá
-CENTER_WEIGHT = 8
-THREE_IN_A_ROW_WEIGHT = 100
-TWO_IN_A_ROW_WEIGHT = 10
-ONE_IN_A_ROW_WEIGHT = 1
-OPPONENT_THREE_WEIGHT = -120
-OPPONENT_TWO_WEIGHT = -5
-
-# Bảng trans có sẵn (transposition table)
-transposition_table = {}
+DIFFICULTY_DEPTH = 6
+TIME_LIMIT = 9.5  # Giới hạn thời gian thực sự là 9.5s để dự phòng
 
 
 class GameState(BaseModel):
     board: List[List[int]]
     current_player: int
     valid_moves: List[int]
-    difficulty: Optional[int] = 6  # 1-10, mặc định là 5
 
 
 class AIResponse(BaseModel):
     move: int
-    depth_reached: int
-    positions_evaluated: int
-    thinking_time: float
-
-
-@dataclass
-class MoveInfo:
-    col: int
-    score: int
-    depth_reached: int
-    positions_evaluated: int
+    thinking_time: float = 0.0
 
 
 def drop_piece(board, row, col, piece):
@@ -124,16 +99,16 @@ def evaluate_window(window, piece):
     if window.count(piece) == 4:
         score += 10000
     elif window.count(piece) == 3 and window.count(EMPTY) == 1:
-        score += THREE_IN_A_ROW_WEIGHT
+        score += 100
     elif window.count(piece) == 2 and window.count(EMPTY) == 2:
-        score += TWO_IN_A_ROW_WEIGHT
+        score += 10
     elif window.count(piece) == 1 and window.count(EMPTY) == 3:
-        score += ONE_IN_A_ROW_WEIGHT
+        score += 1
 
     if window.count(opp_piece) == 3 and window.count(EMPTY) == 1:
-        score += OPPONENT_THREE_WEIGHT
+        score -= 120
     elif window.count(opp_piece) == 2 and window.count(EMPTY) == 2:
-        score += OPPONENT_TWO_WEIGHT
+        score -= 5
 
     return score
 
@@ -144,7 +119,7 @@ def score_position(board, piece):
     # Ưu tiên cột giữa
     center_array = [int(i) for i in list(np.array(board)[:, COLS // 2])]
     center_count = center_array.count(piece)
-    score += center_count * CENTER_WEIGHT
+    score += center_count * 8
 
     # Đánh giá hàng ngang
     for r in range(ROWS):
@@ -175,9 +150,10 @@ def score_position(board, piece):
     return score
 
 
-def board_to_key(board):
-    """Chuyển đổi bảng thành khóa có thể hash để lưu vào bảng trans"""
-    return tuple(tuple(row) for row in board)
+@lru_cache(maxsize=None)
+def score_position_cached(board_bytes, piece):
+    board = np.frombuffer(board_bytes, dtype=int).reshape((ROWS, COLS))
+    return score_position(board.tolist(), piece)
 
 
 def is_terminal_node(board):
@@ -201,20 +177,12 @@ def order_moves(board, valid_locations, piece):
     return [col for score, col in scored_moves]
 
 
-def minimax(board, depth, alpha, beta, maximizing_player, start_time, positions_evaluated):
-    """Thuật toán minimax với alpha-beta pruning và kiểm tra thời gian"""
+def minimax(board, depth, alpha, beta, maximizing_player, start_time):
+    """Thuật toán minimax với kiểm tra thời gian chặt chẽ"""
 
-    # Kiểm tra thời gian mỗi 100 nút được đánh giá
-    positions_evaluated[0] += 1
-    if positions_evaluated[0] % 100 == 0 and time.time() - start_time > TIME_LIMIT:
+    # Kiểm tra thời gian sau mỗi nút được đánh giá
+    if time.time() - start_time > TIME_LIMIT:
         raise TimeoutError("Hết thời gian suy nghĩ")
-
-    # Kiểm tra bảng trans
-    board_key = board_to_key(board)
-    if board_key in transposition_table and transposition_table[board_key][0] >= depth:
-        stored_depth, stored_value, stored_move = transposition_table[board_key]
-        if stored_depth >= depth:
-            return stored_move, stored_value
 
     valid_locations = get_valid_locations(board)
     is_terminal = is_terminal_node(board)
@@ -223,13 +191,14 @@ def minimax(board, depth, alpha, beta, maximizing_player, start_time, positions_
     if depth == 0 or is_terminal:
         if is_terminal:
             if winning_move(board, AI_PIECE):
-                return None, 1000000
+                return None, 1_000_000_000
             elif winning_move(board, PLAYER_PIECE):
-                return None, -1000000
+                return None, -1_000_000_000
             else:  # Hòa
                 return None, 0
         else:
-            return None, score_position(board, AI_PIECE)
+            board_bytes = np.array(board).astype(int).tobytes()
+            return None, score_position_cached(board_bytes, AI_PIECE)
 
     # Sắp xếp các nước đi để tối ưu alpha-beta pruning
     if maximizing_player:
@@ -242,12 +211,18 @@ def minimax(board, depth, alpha, beta, maximizing_player, start_time, positions_
     if maximizing_player:
         value = -math.inf
         for col in ordered_cols:
+            # Kiểm tra thời gian
+            if time.time() - start_time > TIME_LIMIT:
+                return best_col, value
+
             row = get_next_open_row(board, col)
             temp_board = [r.copy() for r in board]
             drop_piece(temp_board, row, col, AI_PIECE)
 
-            _, new_score = minimax(temp_board, depth - 1, alpha, beta, False, start_time,
-                                   positions_evaluated)
+            try:
+                _, new_score = minimax(temp_board, depth - 1, alpha, beta, False, start_time)
+            except TimeoutError:
+                return best_col, value
 
             if new_score > value:
                 value = new_score
@@ -260,12 +235,18 @@ def minimax(board, depth, alpha, beta, maximizing_player, start_time, positions_
     else:  # minimizing player
         value = math.inf
         for col in ordered_cols:
+            # Kiểm tra thời gian
+            if time.time() - start_time > TIME_LIMIT:
+                return best_col, value
+
             row = get_next_open_row(board, col)
             temp_board = [r.copy() for r in board]
             drop_piece(temp_board, row, col, PLAYER_PIECE)
 
-            _, new_score = minimax(temp_board, depth - 1, alpha, beta, True, start_time,
-                                   positions_evaluated)
+            try:
+                _, new_score = minimax(temp_board, depth - 1, alpha, beta, True, start_time)
+            except TimeoutError:
+                return best_col, value
 
             if new_score < value:
                 value = new_score
@@ -275,45 +256,7 @@ def minimax(board, depth, alpha, beta, maximizing_player, start_time, positions_
             if beta <= alpha:
                 break
 
-    # Lưu kết quả vào bảng trans
-    transposition_table[board_key] = (depth, value, best_col)
-
     return best_col, value
-
-
-def iterative_deepening(board, max_depth, start_time):
-    """Iterative deepening: tăng dần độ sâu tìm kiếm theo thời gian cho phép"""
-    best_move = random.choice(get_valid_locations(board))
-    best_score = -math.inf
-    depth_reached = 0
-    positions_evaluated = [0]  # Sử dụng list để có thể thay đổi giá trị bên trong hàm
-
-    # Bắt đầu từ độ sâu 1, tăng dần lên
-    for depth in range(1, max_depth + 1):
-        try:
-            # Nếu còn đủ thời gian, thực hiện minimax ở độ sâu hiện tại
-            move, score = minimax(board, depth, -math.inf, math.inf, True, start_time,
-                                  positions_evaluated)
-
-            if move is not None:
-                best_move = move
-                best_score = score
-                depth_reached = depth
-
-            # Nếu đã tìm thấy nước thắng, không cần tìm kiếm sâu hơn
-            if score >= 100000:
-                break
-
-        except TimeoutError:
-            # Nếu hết thời gian, dừng tìm kiếm và trả về kết quả tốt nhất đã tìm được
-            break
-
-    return MoveInfo(
-        col=best_move,
-        score=best_score,
-        depth_reached=depth_reached,
-        positions_evaluated=positions_evaluated[0]
-    )
 
 
 @app.post("/api/connect4-move")
@@ -322,35 +265,23 @@ async def make_move(game_state: GameState) -> AIResponse:
     if not game_state.valid_moves:
         raise HTTPException(status_code=400, detail="Không có nước đi hợp lệ")
 
-    # Xóa bảng trans để tránh dùng kết quả cũ
-    transposition_table.clear()
-
-    # Điều chỉnh độ sâu tìm kiếm dựa trên độ khó
-    max_depth = min(MAX_DEPTH, 1 + game_state.difficulty)
-
-    start_time = time.time()
+    # Luôn có nước đi mặc định nếu minimax không kịp trả về
     best_move = random.choice(game_state.valid_moves)
+    start_time = time.time()
 
     try:
-        # Sử dụng iterative deepening để tận dụng tốt thời gian suy nghĩ
-        move_info = iterative_deepening(board, max_depth, start_time)
-        best_move = move_info.col
-        depth_reached = move_info.depth_reached
-        positions_evaluated = move_info.positions_evaluated
+        # Thực hiện minimax với giới hạn thời gian chặt chẽ
+        move, _ = minimax(board, DIFFICULTY_DEPTH, -math.inf, math.inf, True, start_time)
+        if move is not None and move in game_state.valid_moves:
+            best_move = move
+    except TimeoutError:
+        print("⚠️ Hết thời gian cho Minimax")
     except Exception as e:
-        print(f"Lỗi trong quá trình tìm kiếm nước đi: {e}")
-        depth_reached = 0
-        positions_evaluated = 0
+        print(f"Lỗi trong quá trình tìm kiếm: {e}")
 
     thinking_time = time.time() - start_time
 
-    # Kiểm tra xem nước đi có hợp lệ không
-    if best_move not in game_state.valid_moves:
-        best_move = random.choice(game_state.valid_moves)
-
-    return AIResponse(
-        move=best_move,
-    )
+    return AIResponse(move=best_move, thinking_time=thinking_time)
 
 
 if __name__ == "__main__":
