@@ -7,12 +7,9 @@ import random
 import math
 import time
 from functools import lru_cache
+import concurrent.futures
 
 app = FastAPI()
-
-@app.get("/api/test")
-async def health_check():
-    return {"status": "ok", "message": "Server is running"}
 
 app.add_middleware(
     CORSMiddleware,
@@ -22,7 +19,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-
+@app.get("/api/test")
+async def health_check():
+    return {"status": "ok", "message": "Server is running"}
 
 ROWS = 6
 COLS = 7
@@ -135,9 +134,13 @@ def order_moves(board, valid_locations, piece):
     scored_moves.sort(reverse=True)
     return [col for score, col in scored_moves]
 
-def minimax(board, depth, alpha, beta, maximizing_player):
+def minimax(board, depth, alpha, beta, maximizing_player, start_time, time_limit):
+    if time.time() - start_time > time_limit:
+        raise TimeoutError("Time limit exceeded")
+
     valid_locations = get_valid_locations(board)
     is_terminal = is_terminal_node(board)
+
     if depth == 0 or is_terminal:
         if is_terminal:
             if winning_move(board, AI_PIECE):
@@ -149,14 +152,20 @@ def minimax(board, depth, alpha, beta, maximizing_player):
         else:
             board_bytes = np.array(board).astype(int).tobytes()
             return (None, score_position_cached(board_bytes, AI_PIECE))
+
+    best_col = random.choice(valid_locations)
     if maximizing_player:
         value = -math.inf
-        best_col = random.choice(valid_locations)
         for col in order_moves(board, valid_locations, AI_PIECE):
+            if time.time() - start_time > time_limit:
+                raise TimeoutError("Time limit exceeded")
             row = get_next_open_row(board, col)
             temp_board = [r.copy() for r in board]
             drop_piece(temp_board, row, col, AI_PIECE)
-            new_score = minimax(temp_board, depth - 1, alpha, beta, False)[1]
+            try:
+                _, new_score = minimax(temp_board, depth - 1, alpha, beta, False, start_time, time_limit)
+            except TimeoutError as e:
+                raise e
             if new_score > value:
                 value = new_score
                 best_col = col
@@ -166,12 +175,16 @@ def minimax(board, depth, alpha, beta, maximizing_player):
         return best_col, value
     else:
         value = math.inf
-        best_col = random.choice(valid_locations)
         for col in order_moves(board, valid_locations, PLAYER_PIECE):
+            if time.time() - start_time > time_limit:
+                raise TimeoutError("Time limit exceeded")
             row = get_next_open_row(board, col)
             temp_board = [r.copy() for r in board]
             drop_piece(temp_board, row, col, PLAYER_PIECE)
-            new_score = minimax(temp_board, depth - 1, alpha, beta, True)[1]
+            try:
+                _, new_score = minimax(temp_board, depth - 1, alpha, beta, True, start_time, time_limit)
+            except TimeoutError as e:
+                raise e
             if new_score < value:
                 value = new_score
                 best_col = col
@@ -180,18 +193,30 @@ def minimax(board, depth, alpha, beta, maximizing_player):
                 break
         return best_col, value
 
+def run_minimax(board):
+    start_time = time.time()
+    return minimax(board, DIFFICULTY_DEPTH, -math.inf, math.inf, True, start_time, 9.5)
+
 @app.post("/api/connect4-move")
 async def make_move(game_state: GameState) -> AIResponse:
+    board = game_state.board
+    if not game_state.valid_moves:
+        raise HTTPException(status_code=400, detail="Không có nước đi hợp lệ")
+
+    best_move = random.choice(game_state.valid_moves)
+
     try:
-        board = game_state.board
-        if not game_state.valid_moves:
-            raise ValueError("Không có nước đi hợp lệ")
-        selected_move, _ = minimax(board, DIFFICULTY_DEPTH, -math.inf, math.inf, True)
-        return AIResponse(move=selected_move)
+        with concurrent.futures.ProcessPoolExecutor() as executor:
+            future = executor.submit(run_minimax, board)
+            move, _ = future.result(timeout=10.0)
+            if move is not None:
+                best_move = move
+    except concurrent.futures.TimeoutError:
+        print("⚠️ Timeout toàn hệ thống Minimax sau 10 giây")
     except Exception as e:
-        if game_state.valid_moves:
-            return AIResponse(move=game_state.valid_moves[0])
-        raise HTTPException(status_code=400, detail=str(e))
+        print("Lỗi Minimax:", e)
+
+    return AIResponse(move=best_move)
 
 if __name__ == "__main__":
     import uvicorn
