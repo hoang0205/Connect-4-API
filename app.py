@@ -28,7 +28,7 @@ PLAYER_PIECE = 1
 AI_PIECE = 2
 EMPTY = 0
 WINDOW_LENGTH = 4
-DIFFICULTY_DEPTH = 7
+DIFFICULTY_DEPTH = 6
 
 class GameState(BaseModel):
     board: List[List[int]]
