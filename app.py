@@ -1,205 +1,301 @@
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
-from typing import List, Optional, Tuple
+from typing import List
+from fastapi.middleware.cors import CORSMiddleware
+import numpy as np
 import random
+import math
 import time
-import threading
+from functools import lru_cache
 
 app = FastAPI()
 
-# Thông số game
-ROWS, COLS = 6, 7
-WINDOW_LENGTH = 4
-MAX_DEPTH = 10
-TIME_LIMIT = 7.5
-TT_SIZE_LIMIT = 1_000_000
-MIN_TT_DEPTH = 1
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
-# Zobrist table: Python int, không cần NumPy
-ZOBRIST_TABLE = [
-    [ (random.getrandbits(64), random.getrandbits(64)) for _ in range(COLS) ] 
-    for _ in range(ROWS)
-]
+
+@app.get("/api/test")
+async def health_check():
+    return {"status": "ok", "message": "Server is running"}
+
+
+ROWS = 6
+COLS = 7
+PLAYER_PIECE = 1
+AI_PIECE = 2
+EMPTY = 0
+WINDOW_LENGTH = 4
+DIFFICULTY_DEPTH = 6
+TIME_LIMIT = 8.0
+
 
 class GameState(BaseModel):
-    board: List[List[int]]           # 0=empty, 1 or 2
-    current_player: int              # 1 hoặc 2
+    board: List[List[int]]
+    current_player: int
     valid_moves: List[int]
+
 
 class AIResponse(BaseModel):
     move: int
-    thinking_time: float
+    thinking_time: float = 0.0
 
-class Connect4Engine:
-    def __init__(self, board: List[List[int]], ai_piece: int):
-        self.board = board
-        self.ai_piece = ai_piece
-        self.human_piece = 3 - ai_piece
-        self.current_hash = self._compute_hash()
-        self.TT = {}  # Transposition Table
 
-    def _compute_hash(self) -> int:
-        h = 0
+def drop_piece(board, row, col, piece):
+    board[row][col] = piece
+
+
+def is_valid_location(board, col):
+    return board[0][col] == 0
+
+
+def get_next_open_row(board, col):
+    for r in range(ROWS - 1, -1, -1):
+        if board[r][col] == 0:
+            return r
+    return -1
+
+
+def get_valid_locations(board):
+    return [col for col in range(COLS) if is_valid_location(board, col)]
+
+
+def winning_move(board, piece):
+    # Kiểm tra hàng ngang
+    for c in range(COLS - 3):
         for r in range(ROWS):
-            for c in range(COLS):
-                p = self.board[r][c]
-                if p:
-                    # index 0 cho human, 1 cho AI
-                    idx = 1 if p == self.ai_piece else 0
-                    h ^= ZOBRIST_TABLE[r][c][idx]
-        return h
+            if all(board[r][c + i] == piece for i in range(4)):
+                return True
 
-    def _drop(self, board: List[List[int]], row: int, col: int, piece: int, h: int) -> Tuple[int,int]:
-        board[row][col] = piece
-        idx = 1 if piece == self.ai_piece else 0
-        return board, (h ^ ZOBRIST_TABLE[row][col][idx])
-
-    def _is_valid(self, col: int) -> bool:
-        return self.board[0][col] == 0
-
-    def _next_row(self, col: int) -> Optional[int]:
-        for r in range(ROWS - 1, -1, -1):
-            if self.board[r][col] == 0:
-                return r
-        return None
-
-    def _valid_moves(self) -> List[int]:
-        return [c for c in range(COLS) if self._is_valid(c)]
-
-    def _win_check(self, b: List[List[int]], piece: int) -> bool:
-        # ghép 4 ngang, dọc, chéo
-        for r in range(ROWS):
-            for c in range(COLS - 3):
-                if all(b[r][c+i] == piece for i in range(4)): return True
-        for c in range(COLS):
-            for r in range(ROWS - 3):
-                if all(b[r+i][c] == piece for i in range(4)): return True
+    # Kiểm tra hàng dọc
+    for c in range(COLS):
         for r in range(ROWS - 3):
-            for c in range(COLS - 3):
-                if all(b[r+i][c+i] == piece for i in range(4)): return True
+            if all(board[r + i][c] == piece for i in range(4)):
+                return True
+
+    # Kiểm tra đường chéo chính (/)
+    for c in range(COLS - 3):
         for r in range(ROWS - 3):
-            for c in range(3, COLS):
-                if all(b[r+i][c-i] == piece for i in range(4)): return True
-        return False
+            if all(board[r + i][c + i] == piece for i in range(4)):
+                return True
 
-    def _is_terminal(self, b: List[List[int]]) -> bool:
-        return self._win_check(b, self.ai_piece) or self._win_check(b, self.human_piece) or not self._valid_moves()
+    # Kiểm tra đường chéo phụ (\)
+    for c in range(COLS - 3):
+        for r in range(3, ROWS):
+            if all(board[r - i][c + i] == piece for i in range(4)):
+                return True
 
-    def _evaluate_window(self, window: List[int], piece: int) -> int:
-        score = 0
-        opp = self.human_piece if piece == self.ai_piece else self.ai_piece
-        cnt_p = window.count(piece)
-        cnt_e = window.count(0)
-        cnt_o = window.count(opp)
-        if cnt_p == 4:
-            score += 10000
-        elif cnt_p == 3 and cnt_e == 1:
-            score += 100
-        elif cnt_p == 2 and cnt_e == 2:
-            score += 10
-        if cnt_o == 3 and cnt_e == 1:
-            score -= 80
-        return score
+    return False
 
-    def score(self, b: List[List[int]], piece: int) -> int:
-        s = 0
-        # ngang, dọc, 2 chéo
-        for r in range(ROWS):
-            for c in range(COLS - 3):
-                s += self._evaluate_window(b[r][c:c+4], piece)
-        for c in range(COLS):
-            col_arr = [b[r][c] for r in range(ROWS)]
-            for r in range(ROWS - 3):
-                s += self._evaluate_window(col_arr[r:r+4], piece)
+
+def evaluate_window(window, piece):
+    score = 0
+    opp_piece = PLAYER_PIECE if piece == AI_PIECE else AI_PIECE
+
+    if window.count(piece) == 4:
+        score += 10000
+    elif window.count(piece) == 3 and window.count(EMPTY) == 1:
+        score += 100
+    elif window.count(piece) == 2 and window.count(EMPTY) == 2:
+        score += 10
+    elif window.count(piece) == 1 and window.count(EMPTY) == 3:
+        score += 1
+
+    if window.count(opp_piece) == 3 and window.count(EMPTY) == 1:
+        score -= 120
+    elif window.count(opp_piece) == 2 and window.count(EMPTY) == 2:
+        score -= 5
+
+    return score
+
+
+def score_position(board, piece):
+    score = 0
+
+    # Ưu tiên cột giữa
+    center_array = [int(i) for i in list(np.array(board)[:, COLS // 2])]
+    center_count = center_array.count(piece)
+    score += center_count * 8
+
+    # Đánh giá hàng ngang
+    for r in range(ROWS):
+        row_array = [int(i) for i in board[r]]
+        for c in range(COLS - 3):
+            window = row_array[c:c + WINDOW_LENGTH]
+            score += evaluate_window(window, piece)
+
+    # Đánh giá hàng dọc
+    for c in range(COLS):
+        col_array = [int(i) for i in list(np.array(board)[:, c])]
         for r in range(ROWS - 3):
-            for c in range(COLS - 3):
-                s += self._evaluate_window([b[r+i][c+i] for i in range(4)], piece)
-        for r in range(ROWS - 3):
-            for c in range(3, COLS):
-                s += self._evaluate_window([b[r+i][c-i] for i in range(4)], piece)
-        return s
+            window = col_array[r:r + WINDOW_LENGTH]
+            score += evaluate_window(window, piece)
 
-    def order_moves(self, moves: List[int], piece: int, h: int) -> List[int]:
-        scored = []
-        for col in moves:
-            row = self._next_row(col)
-            if row is None: continue
-            tb = [row.copy() for row in self.board]  # shallow copy
-            _, nh = self._drop(tb, row, col, piece, h)
-            scored.append((col, self.score(tb, piece)))
-        return [c for c, _ in sorted(scored, key=lambda x: -x[1])]
+    # Đánh giá đường chéo chính (/)
+    for r in range(ROWS - 3):
+        for c in range(COLS - 3):
+            window = [board[r + i][c + i] for i in range(WINDOW_LENGTH)]
+            score += evaluate_window(window, piece)
 
-    def minimax(self, b, depth, alpha, beta, maximizing, start_time, h) -> Tuple[Optional[int], int]:
-        # time cutoff
-        if time.time() - start_time > TIME_LIMIT:
-            raise TimeoutError
-        # TT lookup
-        if h in self.TT:
-            entry = self.TT[h]
-            if entry['depth'] >= depth:
-                flag = entry['flag']; val = entry['score']
-                if flag == 'exact': return entry['move'], val
-                if flag == 'lower': alpha = max(alpha, val)
-                if flag == 'upper': beta = min(beta, val)
-                if alpha >= beta: return entry['move'], val
+    # Đánh giá đường chéo phụ (\)
+    for r in range(ROWS - 3):
+        for c in range(COLS - 3):
+            window = [board[r + 3 - i][c + i] for i in range(WINDOW_LENGTH)]
+            score += evaluate_window(window, piece)
 
-        valid = self._valid_moves()
-        terminal = self._is_terminal(b)
-        if depth == 0 or terminal:
-            if terminal:
-                if self._win_check(b, self.ai_piece): return None, 10**9
-                if self._win_check(b, self.human_piece): return None, -10**9
+    return score
+
+
+@lru_cache(maxsize=None)
+def score_position_cached(board_bytes, piece):
+    board = np.frombuffer(board_bytes, dtype=int).reshape((ROWS, COLS))
+    return score_position(board.tolist(), piece)
+
+
+def is_terminal_node(board):
+    return winning_move(board, PLAYER_PIECE) or winning_move(board, AI_PIECE) or len(
+        get_valid_locations(board)) == 0
+
+
+def order_moves(board, valid_locations, piece):
+    scored_moves = []
+
+    for col in valid_locations:
+        row = get_next_open_row(board, col)
+        temp_board = [row.copy() for row in board]
+        drop_piece(temp_board, row, col, piece)
+        score = score_position(temp_board, piece)
+        scored_moves.append((score, col))
+
+    # Sắp xếp giảm dần theo điểm số
+    scored_moves.sort(reverse=True)
+    return [col for score, col in scored_moves]
+
+
+def minimax(board, depth, alpha, beta, maximizing_player, start_time):
+    if time.time() - start_time > TIME_LIMIT:
+        raise TimeoutError("Hết thời gian suy nghĩ")
+
+    valid_locations = get_valid_locations(board)
+    is_terminal = is_terminal_node(board)
+
+    if depth == 0 or is_terminal:
+        if is_terminal:
+            if winning_move(board, AI_PIECE):
+                return None, 1_000_000_000
+            elif winning_move(board, PLAYER_PIECE):
+                return None, -1_000_000_000
+            else:  # Hòa
                 return None, 0
-            return None, self.score(b, self.ai_piece)
+        else:
+            board_bytes = np.array(board).astype(int).tobytes()
+            return None, score_position_cached(board_bytes, AI_PIECE)
 
-        piece = self.ai_piece if maximizing else self.human_piece
-        ordered = self.order_moves(valid, piece, h)
-        best_move = None
-        best_score = -1e18 if maximizing else 1e18
+    if maximizing_player:
+        ordered_cols = order_moves(board, valid_locations, AI_PIECE)
+    else:
+        ordered_cols = order_moves(board, valid_locations, PLAYER_PIECE)
 
-        for col in ordered:
-            if time.time() - start_time > TIME_LIMIT: break
-            row = self._next_row(col)
-            tb = [r.copy() for r in b]
-            _, nh = self._drop(tb, row, col, piece, h)
+    best_col = random.choice(valid_locations) if valid_locations else None
+
+    if maximizing_player:
+        value = -math.inf
+        for col in ordered_cols:
+            if time.time() - start_time > TIME_LIMIT:
+                return best_col, value
+
+            row = get_next_open_row(board, col)
+            temp_board = [r.copy() for r in board]
+            drop_piece(temp_board, row, col, AI_PIECE)
+
             try:
-                _, sc = self.minimax(tb, depth-1, alpha, beta, not maximizing, start_time, nh)
+                _, new_score = minimax(temp_board, depth - 1, alpha, beta, False, start_time)
             except TimeoutError:
+                return best_col, value
+
+            if new_score > value:
+                value = new_score
+                best_col = col
+
+            alpha = max(alpha, value)
+            if alpha >= beta:
                 break
-            if maximizing and sc > best_score:
-                best_score, best_move = sc, col; alpha = max(alpha, sc)
-            if not maximizing and sc < best_score:
-                best_score, best_move = sc, col; beta = min(beta, sc)
-            if alpha >= beta: break
 
-        # TT store
-        if depth >= MIN_TT_DEPTH and len(self.TT) < TT_SIZE_LIMIT:
-            flag = ('exact' if alpha < best_score < beta else
-                    'lower' if best_score >= beta else
-                    'upper')
-            self.TT[h] = {'depth': depth, 'score': best_score, 'flag': flag, 'move': best_move}
+    else:  # minimizing player
+        value = math.inf
+        for col in ordered_cols:
+            if time.time() - start_time > TIME_LIMIT:
+                return best_col, value
 
-        return best_move, best_score
+            row = get_next_open_row(board, col)
+            temp_board = [r.copy() for r in board]
+            drop_piece(temp_board, row, col, PLAYER_PIECE)
 
-    def find_best(self, valid_moves: List[int]) -> Tuple[int, float]:
-        start = time.time()
-        best_move = random.choice(valid_moves)
-        best_score = -1e18
-        depth = 4
-        while depth <= MAX_DEPTH and (time.time() - start) < TIME_LIMIT:
             try:
-                mv, sc = self.minimax(self.board, depth, -1e18, 1e18, True, start, self.current_hash)
-                if mv in valid_moves and sc > best_score:
-                    best_move, best_score = mv, sc
+                _, new_score = minimax(temp_board, depth - 1, alpha, beta, True, start_time)
             except TimeoutError:
+                return best_col, value
+
+            if new_score < value:
+                value = new_score
+                best_col = col
+
+            beta = min(beta, value)
+            if beta <= alpha:
                 break
-            depth += 1
-        return best_move, time.time() - start
+
+    return best_col, value
+
 
 @app.post("/api/connect4-move")
-async def make_move(gs: GameState) -> AIResponse:
-    if not gs.valid_moves:
-        raise HTTPException(400, "No valid moves")
-    engine = Connect4Engine(gs.board, gs.current_player)
-    mv, t = engine.find_best(gs.valid_moves)
-    return AIResponse(move=mv, thinking_time=round(t, 4))
+async def make_move(game_state: GameState) -> AIResponse:
+    board = game_state.board
+    if not game_state.valid_moves:
+        raise HTTPException(status_code=400, detail="Không có nước đi hợp lệ")
+
+    best_move = random.choice(game_state.valid_moves)
+    start_time = time.time()
+
+    try:
+        move, _ = minimax(board, DIFFICULTY_DEPTH, -math.inf, math.inf, True, start_time)
+        if move is not None and move in game_state.valid_moves:
+            best_move = move
+    except TimeoutError:
+        print("⚠️ Hết thời gian cho Minimax")
+    except Exception as e:
+        print(f"Lỗi trong quá trình tìm kiếm: {e}")
+
+    thinking_time = time.time() - start_time
+
+    return AIResponse(move=best_move, thinking_time=thinking_time)
+
+@app.post("/api/connect4-move1")
+async def make_move(game_state: GameState) -> AIResponse:
+    board = game_state.board
+    if not game_state.valid_moves:
+        raise HTTPException(status_code=400, detail="Không có nước đi hợp lệ")
+
+    best_move = random.choice(game_state.valid_moves)
+    start_time = time.time()
+
+    try:
+        move, _ = minimax(board, 6, -math.inf, math.inf, True, start_time)
+        if move is not None and move in game_state.valid_moves:
+            best_move = move
+    except TimeoutError:
+        print("⚠️ Hết thời gian cho Minimax")
+    except Exception as e:
+        print(f"Lỗi trong quá trình tìm kiếm: {e}")
+
+    thinking_time = time.time() - start_time
+
+    return AIResponse(move=best_move, thinking_time=thinking_time)
+
+if __name__ == "__main__":
+    import uvicorn
+
+    uvicorn.run(app, host="0.0.0.0", port=8080)
