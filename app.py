@@ -251,7 +251,7 @@ def minimax(board, depth, alpha, beta, maximizing_player, start_time):
     return best_col, value
 
 
-@app.post("/api/connect4-move")
+@app.post("/api/connect4-move1")
 async def make_move(game_state: GameState) -> AIResponse:
     board = game_state.board
     if not game_state.valid_moves:
@@ -273,7 +273,7 @@ async def make_move(game_state: GameState) -> AIResponse:
 
     return AIResponse(move=best_move, thinking_time=thinking_time)
 
-@app.post("/api/connect4-move1")
+@app.post("/api/connect4-move")
 async def make_move(game_state: GameState) -> AIResponse:
     board = game_state.board
     if not game_state.valid_moves:
