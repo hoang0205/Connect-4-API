@@ -242,7 +242,7 @@ def minimax(board, depth, alpha, beta, maximizing_player, start_time, current_ha
     return best_col, best_score
 
 # API endpoint with Iterative Deepening starting from depth 4
-@app.post("/api/connect4-move")
+@app.post("/api/connect4-move11")
 async def make_move(game_state: GameState) -> AIResponse:
     board = game_state.board
     if not game_state.valid_moves:
