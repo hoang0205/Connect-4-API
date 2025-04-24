@@ -31,7 +31,7 @@ AI_PIECE = 2
 EMPTY = 0
 WINDOW_LENGTH = 4
 DIFFICULTY_DEPTH = 6
-TIME_LIMIT = 8.0
+TIME_LIMIT = 7.5
 
 
 class GameState(BaseModel):
