@@ -19,7 +19,7 @@ WINDOW_LENGTH = 4
 MAX_DEPTH = 10
 TIME_LIMIT = 9.0
 TT_SIZE_LIMIT = 1_000_000  # Giới hạn kích thước Transposition Table
-MIN_TT_DEPTH = 4  # Chỉ lưu trạng thái ở độ sâu >= 4
+MIN_TT_DEPTH = 1  # Chỉ lưu trạng thái ở độ sâu >= 4
 
 # Initialize Zobrist hash table
 ZOBRIST_TABLE = np.random.randint(1, 2**64 - 1, size=(ROWS, COLS, 3), dtype=np.uint64)
