@@ -273,6 +273,27 @@ async def make_move(game_state: GameState) -> AIResponse:
 
     return AIResponse(move=best_move, thinking_time=thinking_time)
 
+@app.post("/api/connect4-move1")
+async def make_move(game_state: GameState) -> AIResponse:
+    board = game_state.board
+    if not game_state.valid_moves:
+        raise HTTPException(status_code=400, detail="Không có nước đi hợp lệ")
+
+    best_move = random.choice(game_state.valid_moves)
+    start_time = time.time()
+
+    try:
+        move, _ = minimax(board, 5, -math.inf, math.inf, True, start_time)
+        if move is not None and move in game_state.valid_moves:
+            best_move = move
+    except TimeoutError:
+        print("⚠️ Hết thời gian cho Minimax")
+    except Exception as e:
+        print(f"Lỗi trong quá trình tìm kiếm: {e}")
+
+    thinking_time = time.time() - start_time
+
+    return AIResponse(move=best_move, thinking_time=thinking_time)
 
 if __name__ == "__main__":
     import uvicorn
